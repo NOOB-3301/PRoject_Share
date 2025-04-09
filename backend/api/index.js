@@ -6,19 +6,17 @@ import cors from 'cors'
 let rooms = {};
 let socketToRoom = {};
 
-
 const app = express();
 app.use(cors({ origin: '*', credentials: true }));
 
-
-const server = createServer(app); // Properly create an HTTP server
+const server = createServer(app);
 const io = new Server(server,{
     cors:{
         origin:'*',
         methods:["GET", "POST"],
         credentials:true
     }
-}); // Pass the correct server instance
+});
 
 app.get('/', (req, res) => {
     res.send('hello world');
@@ -26,7 +24,7 @@ app.get('/', (req, res) => {
 
 io.on('connection', (socket) => {
     console.log('a user connected');
-    // Handle user disconnect
+
     socket.on("disconnect", () => {
         console.log('User disconnected:', socket.id);
 
@@ -39,38 +37,55 @@ io.on('connection', (socket) => {
             io.to(roomId).emit("room_users", rooms[roomId]);
         }
     });
+
     socket.on("join", data => {
-        // let a new user join to the room
-        const roomId = data.room
+        const roomId = data.room;
+        
+        // Check if room exists and has less than 2 users
+        if (rooms[roomId] && rooms[roomId].length >= 2) {
+            // Room is full - emit an error event to the client
+            socket.emit("room_join_error", { message: "Room is full! Maximum 2 users allowed." });
+            return;
+        }
+        
         socket.join(roomId);
         socketToRoom[socket.id] = roomId;
-
-        // persist the new user in the room
+        
         if (rooms[roomId]) {
             rooms[roomId].push({id: socket.id, name: data.name});
         } else {
             rooms[roomId] = [{id: socket.id, name: data.name}];
         }
-
-        // sends a list of joined users to a new user
-        const users = rooms[data.room].filter(user => user.id !== socket.id);
-        io.sockets.to(socket.id).emit("room_users", users);
-        console.log("[joined] room:" + data.room + " name: " + data.name);
+        
+        // sends a list of joined users to all users in the room
+        io.to(roomId).emit("room_users", rooms[roomId]);
+        io.emit("available_room", rooms);
+        console.log("[joined] room:" + roomId + " name: " + data.name + " users:" + rooms[roomId].length);
     });
 
+    // Modified WebRTC signaling to use rooms
     socket.on("offer", sdp => {
-        socket.broadcast.emit("getOffer", sdp);
-        console.log("offer: " + socket.id);
+        const roomId = socketToRoom[socket.id];
+        if (roomId) {
+            socket.to(roomId).emit("getOffer", sdp);
+            console.log("offer sent to room:", roomId);
+        }
     });
 
     socket.on("answer", sdp => {
-        socket.broadcast.emit("getAnswer", sdp);
-        console.log("answer: " + socket.id);
+        const roomId = socketToRoom[socket.id];
+        if (roomId) {
+            socket.to(roomId).emit("getAnswer", sdp);
+            console.log("answer sent to room:", roomId);
+        }
     });
 
     socket.on("candidate", candidate => {
-        socket.broadcast.emit("getCandidate", candidate);
-        console.log("candidate: " + socket.id);
+        const roomId = socketToRoom[socket.id];
+        if (roomId) {
+            socket.to(roomId).emit("getCandidate", candidate);
+            console.log("candidate sent to room:", roomId);
+        }
     });
 });
 
